@@ -8,13 +8,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > publishing, installed into *their* Next.js site. Treat every export as a published API even
 > while distribution is limited.
 >
-> **Distribution (as of 2026-08-18): the GitHub repo is PRIVATE and nothing is published to
-> npm.** So today it installs only for accounts with read access:
+> **Distribution (as of 2026-08-18): the GitHub repo is PUBLIC; nothing is published to npm
+> yet.** Anyone can install it straight from git:
 > `npm i git+https://github.com/fistasolutions/ftes-publish-nextjs.git`. A `prepare` script
-> builds `dist/` on install, since build output is gitignored. **External customers cannot
-> install it until the repo is made public** (`gh repo edit --visibility public`) or it is
-> published to npm under the `@ftes` scope. Keep this paragraph accurate — it is the difference
+> builds `dist/` on install, since build output is gitignored — so an install needs the devDeps
+> and takes ~30s the first time. Publishing to npm under the `@ftes` scope is still open; it
+> would remove the build-on-install step. Keep this paragraph accurate — it is the difference
 > between "our users can adopt this" and "only we can".
+>
+> **Public repo, so everything here is public.** No customer names, no internal hostnames, no
+> spec numbers from other repos that leak roadmap.
 
 ## What this is
 
@@ -83,6 +86,10 @@ asserts old behaviour after an intentional change must be updated **with a comme
 
 ## Before publishing
 
-Verified against a real site first (dogfooded on `dynamence.com`: Next 16 +
-`@neondatabase/serverless`, no ORM). Do not publish a version that has only ever run against
-mocks — every defect found in this product so far surfaced when something real ran through it.
+Dogfooded against a real deployed site first (Next 16 + a real Postgres driver, no ORM). **As of
+2026-08-18 this has NOT happened** — the suite is mocks only. Do not publish a version that has
+only ever run against mocks: every defect found in this product so far surfaced when something
+real ran through it.
+
+Name no customer site in this repo. It is a general package for every user, and its docs go
+public with it — what it was validated against belongs in a release note, not in the source.

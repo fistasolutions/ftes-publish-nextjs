@@ -10,8 +10,9 @@ hand is ~150 lines and has three failure modes that are **invisible when you get
    crawlers see an empty shell. The entire point of the product is lost, silently.
 2. **Append instead of upsert** — FTES resends the same article id on retries and manual
    re-publishes, so appending produces duplicate posts.
-3. **A stale sitemap** — the article is live but undiscoverable; observed on the first real
-   integration (dynamence.com), where `/blog` revalidated correctly and `sitemap.xml` did not.
+3. **A stale sitemap or index** — the article is live but undiscoverable. Observed on the first
+   hand-written integration, where the post rendered at its own URL but the ISR-cached `/blog`
+   index kept serving a list that did not contain it.
 
 This package makes the correct behaviour the default. It owns the protocol; the site owner
 supplies only where to store the article.
@@ -167,8 +168,8 @@ a table name is not a bindable parameter, and this is the one place SQL injectio
 12. `FtesArticle` renders exactly one `<h1>`, all sections in order, and the FAQ — with no
     `"use client"` anywhere in the package's server entry points.
 13. `npm test` green, `tsc` clean, and the built package's public exports match this spec.
-14. Verified against a real site (dynamence.com, Next 16 + `@neondatabase/serverless`) before
-    the first npm publish — no shipping on theory.
+14. Verified against a real deployed site (Next 16 + a real Postgres driver) before the first
+    npm publish — no shipping on theory.
 
 ## Patches
 
