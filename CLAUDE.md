@@ -4,9 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 > **Monorepo context:** this is one of **six** independently-versioned repos (git submodules)
 > under `ftesaiapp_main/`. The shared playbook is `../CLAUDE.md`. This repo —
-> `ftes-publish-nextjs` — is the **only PUBLIC, npm-published** one: it is the customer-side
-> half of FTES publishing, installed into *their* Next.js site. Treat every export as a
-> published API.
+> `ftes-publish-nextjs` — is the **customer-facing** one: it is the receiving half of FTES
+> publishing, installed into *their* Next.js site. Treat every export as a published API even
+> while distribution is limited.
+>
+> **Distribution (as of 2026-08-18): the GitHub repo is PRIVATE and nothing is published to
+> npm.** So today it installs only for accounts with read access:
+> `npm i git+https://github.com/fistasolutions/ftes-publish-nextjs.git`. A `prepare` script
+> builds `dist/` on install, since build output is gitignored. **External customers cannot
+> install it until the repo is made public** (`gh repo edit --visibility public`) or it is
+> published to npm under the `@ftes` scope. Keep this paragraph accurate — it is the difference
+> between "our users can adopt this" and "only we can".
 
 ## What this is
 
