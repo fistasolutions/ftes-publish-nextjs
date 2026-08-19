@@ -40,9 +40,9 @@ export const { POST } = createPublishRoute({
   onPublished?: (article, url) => void,        // optional hook (analytics, logging)
 })
 
-// Postgres adapter — Neon, Vercel Postgres, Supabase, self-hosted
+// Postgres adapter — Neon, Vercel Postgres, Supabase, node-postgres, postgres.js
 import { postgresStore, POSTS_TABLE_SQL } from "@ftes/publish-nextjs/postgres"
-const store = postgresStore(sql, { table: "posts" })
+const store = postgresStore((text, params) => sql.query(text, params), { table: "posts" })
 
 // SEO helpers
 import { articleMetadata, articleJsonLd, ftesSitemapEntries } from "@ftes/publish-nextjs"
@@ -101,9 +101,19 @@ be the source of a client-rendering mistake.
 
 ## The Postgres adapter
 
-`postgresStore(sql, { table = "posts" })` accepts any tagged-template client
-(`@neondatabase/serverless`, `@vercel/postgres`, `postgres.js`) and returns
-`{ upsert, get, list }`.
+`postgresStore(query, { table = "posts" })` takes a **`query(text, params)` function**, not a
+tagged-template client, and returns `{ upsert, get, list }`.
+
+This is deliberate and was a correction: a tagged template binds every `${}` as a parameter, and
+a table name cannot be a bound parameter — the tagged-template form could not express this
+adapter's own SQL. A query function is the one shape every Postgres client offers, so a single
+adapter covers them all with real placeholders for every value:
+
+```
+Neon / Vercel:   postgresStore((t, p) => sql.query(t, p))
+node-postgres:   postgresStore((t, p) => pool.query(t, p))
+postgres.js:     postgresStore((t, p) => sql.unsafe(t, p))
+```
 
 `upsert` is a single `INSERT … ON CONFLICT (id) DO UPDATE … RETURNING (xmax = 0) AS is_insert`
 — one round trip that also reports insert-vs-update. `POSTS_TABLE_SQL` is exported so the owner
@@ -173,4 +183,16 @@ a table name is not a bindable parameter, and this is the one place SQL injectio
 
 ## Patches
 
-_(none yet)_
+- 2026-08-19: **README did not copy-paste.** The route example built the store inline, then the
+  article-page and sitemap examples used a `store` binding nothing had defined. Split out a
+  `lib/ftes-store.ts` step that exports `store` and `SITE`; every later example imports from it.
+  The same defect existed in the in-app guide (frontend SPEC-066) and was fixed in the same pass.
+- 2026-08-19: **Spec documented an API that never shipped.** `postgresStore` was specced as
+  `postgresStore(sql, …)` taking a tagged-template client; the implementation takes a
+  `query(text, params)` function, because a tagged template binds every `${}` and a table name
+  cannot be bound. Corrected the signature and recorded why, with the per-client call forms.
+- 2026-08-19: **Requirements understated the constraints.** Added that App Router is required
+  because `revalidatePath` has no Pages Router equivalent, and that `postgresStore` is a Postgres
+  adapter — with the `upsert` escape hatch named for every other store. Also stated that the
+  article page is not optional, since FTES verifies liveness and records a missing page as a
+  failed publish.

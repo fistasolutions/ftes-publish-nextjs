@@ -19,29 +19,45 @@ import { POSTS_TABLE_SQL } from "@ftes/publish-nextjs/postgres"
 // run it once, however you run migrations
 ```
 
-**2. The route** — `app/api/ftes/publish/route.ts`:
+**2. The shared store** — `lib/ftes-store.ts`:
 
 ```ts
-import { createPublishRoute } from "@ftes/publish-nextjs"
 import { postgresStore } from "@ftes/publish-nextjs/postgres"
 import { neon } from "@neondatabase/serverless"
 
+export const SITE = "https://example.com"
+
 const sql = neon(process.env.DATABASE_URL!)
+
+export const store = postgresStore((text, params) => sql.query(text, params))
+```
+
+Everything below imports from this one file, so your site URL and your database connection are
+defined once. (Any Postgres client works — `postgresStore` takes a `query(text, params)`
+function: `pool.query` for node-postgres, `sql.unsafe` for postgres.js, `sql.query` for Neon and
+Vercel Postgres.)
+
+**3. The route** — `app/api/ftes/publish/route.ts`:
+
+```ts
+import { createPublishRoute } from "@ftes/publish-nextjs"
+import { store, SITE } from "@/lib/ftes-store"
 
 export const { POST } = createPublishRoute({
   secret: process.env.FTES_PUBLISH_SECRET!,
-  siteUrl: "https://example.com",
-  store: postgresStore((text, params) => sql.query(text, params)),
+  siteUrl: SITE,
+  store,
 })
 ```
 
-**3. The article page** — `app/blog/[slug]/page.tsx`:
+**4. The article page** — `app/blog/[slug]/page.tsx`:
 
 ```tsx
 import { articleMetadata, articleJsonLd } from "@ftes/publish-nextjs"
 import { FtesArticle } from "@ftes/publish-nextjs/react"
+import { store, SITE } from "@/lib/ftes-store"
 
-const opts = { siteUrl: "https://example.com" }
+const opts = { siteUrl: SITE }
 
 export async function generateMetadata({ params }) {
   const post = await store.get((await params).slug)
@@ -60,17 +76,22 @@ export default async function Page({ params }) {
 }
 ```
 
-**4. The sitemap** — `app/sitemap.ts`:
+This page is not optional. FTES fetches the URL it publishes to and records the publish as
+**failed** if nothing responds — so without it an article stores successfully and still shows as
+a failure in the workspace.
+
+**5. The sitemap** — `app/sitemap.ts`:
 
 ```ts
 import { ftesSitemapEntries } from "@ftes/publish-nextjs"
+import { store, SITE } from "@/lib/ftes-store"
 
 export default async function sitemap() {
-  return ftesSitemapEntries(await store.list(), { siteUrl: "https://example.com" })
+  return ftesSitemapEntries(await store.list(), { siteUrl: SITE })
 }
 ```
 
-**5. Connect it in FTES** — Setup → Integrations → Site publishing:
+**6. Connect it in FTES** — Setup → Integrations → Site publishing:
 your endpoint URL, and the same secret you put in `FTES_PUBLISH_SECRET`.
 
 ## What it does for you
@@ -128,7 +149,13 @@ the workspace when something is wrong.
 
 ## Requirements
 
-Next.js 14+ (App Router), Node 18.17+. React is only needed for `/react`.
+Next.js 14+ (**App Router** — `revalidatePath` has no Pages Router equivalent), Node 18.17+.
+React is only needed for `/react`.
+
+`postgresStore` is a **Postgres** adapter. On MySQL, MongoDB, an ORM, or Markdown files, skip it
+and pass your own `upsert` function instead — `createPublishRoute` accepts
+`upsert: async (article) => ({ isInsert })` and owns everything else (auth, validation,
+idempotency, revalidation, error masking).
 
 Your endpoint must be **HTTPS and publicly reachable** — FTES rejects private or loopback
 addresses, and does not follow redirects, so register the exact final URL.
