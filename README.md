@@ -57,6 +57,11 @@ import { articleMetadata, articleJsonLd } from "@ftes/publish-nextjs"
 import { FtesArticle } from "@ftes/publish-nextjs/react"
 import { store, SITE } from "@/lib/ftes-store"
 
+// Articles arrive AFTER this route was built, so it must not be statically cached.
+// See "Rendering mode" below — this one line is the difference between a live article
+// and a 404 that never goes away.
+export const dynamic = "force-dynamic"
+
 const opts = { siteUrl: SITE }
 
 export async function generateMetadata({ params }) {
@@ -79,6 +84,32 @@ export default async function Page({ params }) {
 This page is not optional. FTES fetches the URL it publishes to and records the publish as
 **failed** if nothing responds — so without it an article stores successfully and still shows as
 a failure in the workspace.
+
+#### Rendering mode — read this if you already have a blog
+
+**If `app/blog/[slug]/page.tsx` uses `generateStaticParams()`, a published article can 404
+forever.** This is the single most likely way a correct installation still fails.
+
+`generateStaticParams` makes the route statically rendered. `dynamicParams` defaults to `true`,
+so a slug that did not exist at build time *is* rendered on demand — but the result is then
+cached with no expiry. If anything requested that URL before the article existed (a crawler,
+a preview link, FTES's own liveness check), Next.js cached the `notFound()` and will keep
+serving it after the row appears.
+
+`revalidatePath` does not reliably clear a negative result that was cached before the article
+existed, so this package cannot fix it for you. Pick one:
+
+```ts
+export const dynamic = "force-dynamic"   // always live — simplest, and what we recommend
+export const revalidate = 0              // equivalent for this purpose
+export const revalidate = 60             // or accept up to 60s of staleness
+```
+
+Any site with an existing file-based blog already has `generateStaticParams` for its own posts,
+so this applies to most real integrations — not the minimal example above, which has no
+`generateStaticParams` and is dynamic already.
+
+`verifyInstall()` (step 8) detects this and names it.
 
 **5. The blog index** — `app/blog/page.tsx` (optional, but easy to get wrong):
 
@@ -135,8 +166,8 @@ entirely possible to finish step 3, see `201 Created`, and have a site that serv
 
 ## What it does for you
 
-Four mistakes are easy to make by hand and **invisible once made**. This package prevents all
-four:
+Five mistakes are easy to make by hand and **invisible once made**. This package prevents all
+five:
 
 | Mistake | Consequence | Handled |
 |---|---|---|
@@ -144,6 +175,7 @@ four:
 | Appending instead of upserting | duplicate posts, because FTES resends the same id on retries | upsert on `id`, and the `Idempotency-Key` header is verified |
 | Forgetting the sitemap | the article is live but undiscoverable | `/sitemap.xml` is revalidated on every publish |
 | Installing the publish route but not the article page | FTES stores the article, returns a URL, and the URL 404s | `verifyInstall()` fetches the URL it would publish and names the missing file |
+| Leaving the article route statically cached | a 404 rendered before the article existed is served forever, even though the row is there | `verifyInstall()` fetches before and after publishing and reports a cached response as the cause |
 
 It also compares your bearer token in constant time, keeps driver errors out of responses
 (FTES shows the response body to the user), and answers `201` vs `200` correctly so FTES can

@@ -51,10 +51,11 @@ src/
   seo.ts        articleMetadata / articleJsonLd / faqJsonLd / ftesSitemapEntries
   postgres.ts   postgresStore(query, {table}) + POSTS_TABLE_SQL
   react.tsx     <FtesArticle> — server component, unstyled
-specs/          SPEC-001 — the source of truth (see Rule 2 in ../CLAUDE.md)
+  verify.ts     verifyInstall() — proves the READ path exists (write→render→index→sitemap)
+specs/          SPEC-001…003 — the source of truth (see Rule 2 in ../CLAUDE.md)
 ```
 
-Three subpath exports: `.`, `./postgres`, `./react`. Adding a fourth means editing
+Four subpath exports: `.`, `./postgres`, `./react`, `./verify`. Adding another means editing
 `package.json#exports` **and** `tsconfig.build.json` coverage.
 
 ## Non-negotiables for this repo

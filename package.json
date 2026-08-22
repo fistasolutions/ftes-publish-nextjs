@@ -1,7 +1,7 @@
 {
   "name": "@ftes/publish-nextjs",
-  "version": "0.3.0",
-  "description": "Receive and publish FTES.AI articles on your Next.js site \u2014 route handler, Postgres adapter, and the SEO essentials.",
+  "version": "0.4.0",
+  "description": "Receive and publish FTES.AI articles on your Next.js site — route handler, Postgres adapter, and the SEO essentials.",
   "license": "MIT",
   "repository": {
     "type": "git",

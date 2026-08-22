@@ -26,6 +26,8 @@ export type VerifyStepName =
   | "write"
   | "read-back"
   | "render"
+  /** SPEC-003: is a failing render actually a cached negative result? */
+  | "cache"
   | "index"
   | "sitemap"
   | "cleanup";
@@ -129,7 +131,17 @@ export async function verifyInstall(config: VerifyConfig): Promise<VerifyResult>
   const steps: VerifyStep[] = [];
   const article = probeArticle();
 
+  // SPEC-003: fetch BEFORE writing. The before/after pair is what makes the render result
+  // interpretable — "404 then 2xx" is a page rendering on demand, while "404 then 404 with the
+  // row readable" is a page refusing to serve an article that demonstrably exists.
+  //
+  // On a statically-cached route this request is also the one that caches the miss, which is
+  // precisely why the second fetch diagnoses rather than merely repeats.
+  const before = fetchImpl ? await tryFetch(fetchImpl, url) : null;
+
   let wrote = false;
+  /** Did the store hand the article back? Proof the data side is correct. */
+  let readable = false;
   try {
     if (store) await store.upsert(article);
     else await upsert!(article);
@@ -155,6 +167,7 @@ export async function verifyInstall(config: VerifyConfig): Promise<VerifyResult>
       });
     } else {
       const found = await store.get(PROBE_SLUG);
+      readable = !!found;
       steps.push(
         found
           ? { step: "read-back", status: "ok", detail: "Read the probe back from the store." }
@@ -169,7 +182,7 @@ export async function verifyInstall(config: VerifyConfig): Promise<VerifyResult>
 
     if (!fetchImpl) {
       // Node 16 and similar: an honest gap beats a false alarm.
-      for (const step of ["render", "index", "sitemap"] as const) {
+      for (const step of ["render", "cache", "index", "sitemap"] as const) {
         steps.push({
           step,
           status: "skipped",
@@ -177,24 +190,71 @@ export async function verifyInstall(config: VerifyConfig): Promise<VerifyResult>
         });
       }
     } else if (!wrote) {
-      for (const step of ["render", "index", "sitemap"] as const) {
+      for (const step of ["render", "cache", "index", "sitemap"] as const) {
         steps.push({ step, status: "skipped", detail: "Nothing was written to render." });
       }
     } else {
       // 3. Render — THE step that the failure this spec exists for would have caught.
       const page = await tryFetch(fetchImpl, url);
+      const beforeNote = before
+        ? ` (before publishing it responded ${before.status})`
+        : "";
       steps.push(
         page.ok
-          ? { step: "render", status: "ok", detail: `${url} responded ${page.status}.` }
+          ? {
+              step: "render",
+              status: "ok",
+              detail: `${url} responded ${page.status}${beforeNote}.`,
+            }
           : {
               step: "render",
               status: "failed",
               detail: page.error
                 ? `${url} could not be reached: ${page.error}`
-                : `${url} responded ${page.status}.`,
-              fix: `No page renders ${blogBasePath}/[slug]. Create app${blogBasePath}/[slug]/page.tsx reading from the same store (README step 4). If it exists, make sure it is deployed and not exported with dynamicParams = false.`,
+                : `${url} responded ${page.status}${beforeNote}.`,
+              // SPEC-003: the old text assumed one cause and sent a reader to create a file
+              // that already existed. Branch on the store read — it is the evidence that
+              // separates "no page" from "a page that will not serve what is there".
+              fix: readable
+                ? `The article IS in your store but ${blogBasePath}/[slug] will not serve it. Most often the route is statically rendered — if it uses generateStaticParams, a 404 produced before the article existed is cached and served forever. Add \`export const dynamic = "force-dynamic"\` (or \`export const revalidate = 0\`) to app${blogBasePath}/[slug]/page.tsx, redeploy, and try again.`
+                : `No page renders ${blogBasePath}/[slug]. Create app${blogBasePath}/[slug]/page.tsx reading from the same store (README step 4). If it exists, make sure it is deployed and not exported with dynamicParams = false.`,
             },
       );
+
+      // 4. Cache — reported ONLY when the store is proven right and the page still will not
+      // serve it. In any other situation a cache verdict is noise, so it stays `skipped`.
+      if (page.ok || !readable) {
+        steps.push({
+          step: "cache",
+          status: "skipped",
+          detail: page.ok
+            ? "The page rendered, so there is no cached failure to diagnose."
+            : "The article was not readable from the store, so a cache verdict would be guesswork.",
+        });
+      } else {
+        const busted = await tryFetch(fetchImpl, `${url}?ftes-cache-check=${article.id}`);
+        steps.push(
+          busted.ok
+            ? {
+                step: "cache",
+                status: "failed",
+                detail:
+                  `The same page responded ${busted.status} with a cache-busting query string ` +
+                  `but ${page.status} without one — the plain URL is serving a CACHED response.`,
+                fix: `Add \`export const dynamic = "force-dynamic"\` (or \`export const revalidate = 0\`) to app${blogBasePath}/[slug]/page.tsx and redeploy. revalidatePath alone does not reliably clear a 404 that was cached before the article existed.`,
+              }
+            : {
+                step: "cache",
+                status: "failed",
+                // Query strings are not a dependable cache-buster on every host, so an
+                // inconclusive result is reported as inconclusive rather than dressed up.
+                detail:
+                  `Could not tell a cached 404 from a missing page: both the plain URL ` +
+                  `(${page.status}) and a cache-busted one (${busted.status}) failed.`,
+                fix: `Two causes, in order of likelihood since the article IS in your store: (1) the route is statically rendered and serving a cached 404 — add \`export const dynamic = "force-dynamic"\`; (2) app${blogBasePath}/[slug]/page.tsx does not read this store, or is not deployed.`,
+              },
+        );
+      }
 
       const index = await tryFetch(fetchImpl, `${siteUrl}${blogBasePath}`);
       steps.push(

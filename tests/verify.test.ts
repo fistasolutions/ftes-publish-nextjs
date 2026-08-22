@@ -181,7 +181,7 @@ describe("verifyInstall — the probe never survives", () => {
 });
 
 describe("verifyInstall — degraded environments", () => {
-  it("does not fetch anything when the write failed", async () => {
+  it("checks nothing beyond the pre-fetch when the write failed", async () => {
     const fetchImpl = fakeFetch(HEALTHY);
     const result = await verifyInstall({
       siteUrl: SITE,
@@ -195,8 +195,14 @@ describe("verifyInstall — degraded environments", () => {
 
     expect(step(result, "write").status).toBe("failed");
     expect(step(result, "write").detail).toContain("does not exist");
-    expect(step(result, "render").status).toBe("skipped");
-    expect(fetchImpl).not.toHaveBeenCalled();
+    for (const name of ["render", "cache", "index", "sitemap"] as const) {
+      expect(step(result, name).status).toBe("skipped");
+    }
+    // SPEC-003 changed this from "never fetches" to "fetches exactly once". The pre-fetch now
+    // runs BEFORE the write, because the before/after pair is what makes a failing render
+    // interpretable. The intent of the original assertion is intact: nothing is CHECKED over
+    // the network once the write failed.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("skips network steps (not fails them) when no fetch exists", async () => {
@@ -237,5 +243,116 @@ describe("verifyInstall — degraded environments", () => {
     });
     expect(result.url).toBe(`${SITE}/insights/${PROBE_SLUG}`);
     expect(step(result, "render").status).toBe("ok");
+  });
+});
+
+
+// ── SPEC-003: a cached 404 is not a missing page ─────────────────────────────
+
+describe("verifyInstall — stale cache detection", () => {
+  /**
+   * The real incident: generateStaticParams made /blog/[slug] statically rendered, the URL was
+   * fetched while the article did not yet exist, Next cached the notFound(), and kept serving
+   * it after the row appeared. SPEC-002's checker passed straight through this, because its
+   * probe slug was fresh and nothing was cached for it.
+   */
+  function cachedNotFound(): typeof fetch {
+    const seen = new Set<string>();
+    return vi.fn(async (input: RequestInfo | URL) => {
+      const u = new URL(String(input));
+      const path = u.pathname.replace(/\/$/, "");
+      if (path === "/blog") return new Response("<h1>Blog</h1>", { status: 200 });
+      if (path === "/sitemap.xml") return new Response("<urlset/>", { status: 200 });
+      if (path === `/blog/${PROBE_SLUG}`) {
+        // A query string bypasses the static cache and renders fresh; the plain path keeps
+        // serving whatever was cached the first time it was asked for.
+        if (u.search) return new Response("<h1>FTES install check</h1>", { status: 200 });
+        if (seen.has(path)) return new Response("cached 404", { status: 404 });
+        seen.add(path);
+        return new Response("404", { status: 404 }); // the miss that poisons the cache
+      }
+      return new Response("not found", { status: 404 });
+    }) as unknown as typeof fetch;
+  }
+
+  it("names caching — not a missing page — when the row is readable", async () => {
+    const result = await verifyInstall({
+      siteUrl: SITE,
+      store: memoryStore(),
+      fetchImpl: cachedNotFound(),
+    });
+
+    expect(result.ok).toBe(false);
+    // The store side is proven correct, which is the evidence that redirects the diagnosis.
+    expect(step(result, "write").status).toBe("ok");
+    expect(step(result, "read-back").status).toBe("ok");
+
+    const render = step(result, "render");
+    expect(render.status).toBe("failed");
+    // It must NOT send the reader to create a page that already exists.
+    expect(render.fix).not.toContain("Create app");
+    expect(render.fix).toContain("force-dynamic");
+    // The before/after pair is what made this interpretable.
+    expect(render.detail).toContain("before publishing");
+
+    const cache = step(result, "cache");
+    expect(cache.status).toBe("failed");
+    expect(cache.detail).toContain("CACHED");
+    expect(cache.fix).toContain("force-dynamic");
+  });
+
+  it("admits when it cannot tell a cached 404 from a missing page", async () => {
+    // Query strings are not a dependable cache-buster on every host. When the busted request
+    // fails too, saying so beats inventing a verdict.
+    const result = await verifyInstall({
+      siteUrl: SITE,
+      store: memoryStore(),
+      fetchImpl: fakeFetch([
+        ["/blog", { status: 200, body: "<h1>Blog</h1>" }],
+        ["/sitemap.xml", { status: 200, body: "<urlset/>" }],
+      ]),
+    });
+
+    const cache = step(result, "cache");
+    expect(cache.status).toBe("failed");
+    expect(cache.detail).toContain("Could not tell");
+    // Both causes, caching first — the store read proves the data is there.
+    expect(cache.fix).toContain("force-dynamic");
+    expect(cache.fix).toContain("does not read this store");
+  });
+
+  it("stays silent when the page renders", async () => {
+    const result = await verifyInstall({
+      siteUrl: SITE,
+      store: memoryStore(),
+      fetchImpl: fakeFetch(HEALTHY),
+    });
+    expect(result.ok).toBe(true);
+    expect(step(result, "cache").status).toBe("skipped");
+    expect(step(result, "cache").detail).toContain("no cached failure");
+  });
+
+  it("stays silent when the article was never readable", async () => {
+    // Without a readable row a cache verdict would be guesswork, and the missing-page advice
+    // is the right one.
+    const writeOnly = {
+      async upsert() {
+        return { isInsert: true };
+      },
+      async get() {
+        return null;
+      },
+      async delete() {},
+    };
+    const result = await verifyInstall({
+      siteUrl: SITE,
+      store: writeOnly,
+      fetchImpl: fakeFetch([["/blog", { status: 200 }]]),
+    });
+
+    expect(step(result, "read-back").status).toBe("failed");
+    expect(step(result, "cache").status).toBe("skipped");
+    expect(step(result, "cache").detail).toContain("guesswork");
+    expect(step(result, "render").fix).toContain("Create app");
   });
 });
