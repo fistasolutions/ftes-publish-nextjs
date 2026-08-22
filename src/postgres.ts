@@ -122,7 +122,24 @@ export function postgresStore(query: QueryFn, options: PostgresStoreOptions = {}
           article.html ?? null,
         ]),
       );
-      return { isInsert: rows[0]?.["is_insert"] === true };
+      // Zero rows here is IMPOSSIBLE from a real database: the statement ends in
+      // `RETURNING (xmax = 0) AS is_insert`, which yields exactly one row on insert and on
+      // update alike. So an empty result cannot mean "not an insert" — it can only mean the
+      // query function never reached a database.
+      //
+      // Treating it as `isInsert: false` is what let a site publish into nothing for days: a
+      // `query` that returned `{ rows: [] }` when its connection string was missing looked
+      // exactly like a successful update. Throwing turns that into `500 store_failed` on the
+      // FIRST publish, which is the difference between a five-minute fix and a silent one.
+      const row = rows[0];
+      if (!row) {
+        throw new Error(
+          "the query function returned no rows from an UPSERT ... RETURNING, which a real " +
+            "database cannot do — it did not reach one. Check the connection string is set " +
+            "in this environment, and that the query function does not swallow a missing one.",
+        );
+      }
+      return { isInsert: row["is_insert"] === true };
     },
 
     async get(slug: string): Promise<Article | null> {

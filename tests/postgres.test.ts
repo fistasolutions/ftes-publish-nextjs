@@ -64,7 +64,38 @@ describe("upsert", () => {
   it("handles both row shapes: an array (Neon/postgres.js) and { rows } (Vercel/pg)", async () => {
     expect((await postgresStore(spy([{ is_insert: true }]).query).upsert(ARTICLE)).isInsert).toBe(true);
     expect((await postgresStore(spy({ rows: [{ is_insert: true }] }).query).upsert(ARTICLE)).isInsert).toBe(true);
-    expect((await postgresStore(spy([]).query).upsert(ARTICLE)).isInsert).toBe(false); // no rows → not an insert
+  });
+
+  it("REFUSES an empty result instead of calling it 'not an insert'", async () => {
+    // Reverses an earlier assertion (`[] -> isInsert: false`) that encoded a real bug: a site
+    // whose query function returned `{ rows: [] }` when its connection string was missing
+    // published articles for days that were never stored. The route answered 200 with a URL,
+    // the page 404'd, and the table stayed empty.
+    //
+    // `RETURNING (xmax = 0) AS is_insert` yields exactly one row on insert AND on update, so
+    // zero rows cannot be a real database answer — it means the query never reached one.
+    await expect(postgresStore(spy([]).query).upsert(ARTICLE)).rejects.toThrow(
+      /did not reach one/,
+    );
+    await expect(postgresStore(spy({ rows: [] }).query).upsert(ARTICLE)).rejects.toThrow(
+      /connection string/,
+    );
+  });
+
+  it("reproduces the silent-no-op store that caused this", async () => {
+    // Verbatim shape of the guard that failed in production, minus the connection.
+    const silent = postgresStore(() => Promise.resolve({ rows: [] }));
+    // The whole point: this now fails on the FIRST publish rather than never.
+    await expect(silent.upsert(ARTICLE)).rejects.toThrow();
+  });
+
+  it("still reads an empty get()/list() as a legitimate answer", async () => {
+    // Only `upsert` has the structural guarantee. "No such article" and "no articles yet" are
+    // real answers, so the same check here would break normal use.
+    // `get`/`list` are optional on ArticleStore; postgresStore always provides them.
+    const store = postgresStore(spy([]).query);
+    expect(await store.get!("missing")).toBeNull();
+    expect(await store.list!()).toEqual([]);
   });
 
   it("sends nulls, not the string 'undefined', for absent optional fields", async () => {

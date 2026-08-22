@@ -196,3 +196,32 @@ a table name is not a bindable parameter, and this is the one place SQL injectio
   adapter — with the `upsert` escape hatch named for every other store. Also stated that the
   article page is not optional, since FTES verifies liveness and records a missing page as a
   failed publish.
+- 2026-08-21: **`upsert` reported success when the query never reached the database.**
+  A real site published articles for days that were never stored. Its `query` function guarded
+  a possibly-missing connection string like this:
+
+  ```ts
+  if (!sql) return Promise.resolve({ rows: [] });   // "prevent build crashes"
+  ```
+
+  A well-meant build-time guard that also runs on every request. `upsert` then did
+  `rows[0]?.["is_insert"] === true` → `false`, returned `{ isInsert: false }`, and the route
+  answered `200` with a URL. Nothing was written; the page read the same empty result and
+  404'd; the `posts` table stayed empty. FTES's liveness check was the only thing that noticed.
+
+  **Zero rows from this statement is structurally impossible.** The UPSERT ends in
+  `RETURNING (xmax = 0) AS is_insert`, so a real Postgres round trip always returns exactly one
+  row — on insert AND on update. An empty result cannot mean "not an insert"; it can only mean
+  the query function never reached a database. `upsert` now throws, which the route already
+  turns into `500 store_failed`, so the very first publish fails loudly instead of succeeding
+  into nothing.
+
+  This **reverses a previously asserted behaviour** — `tests/postgres.test.ts` explicitly
+  covered `[] → isInsert: false` as "no rows → not an insert". That assertion encoded the bug:
+  it read an impossible result as a meaningful one. It is replaced by a test that the impossible
+  result raises.
+
+  Deliberately limited to `upsert`. `get` and `list` legitimately return zero rows — "no such
+  article" and "no articles yet" are real answers there, so the same check would break them.
+  `upsert` is the only method whose empty result carries information, and that information is
+  "your store is lying to you".

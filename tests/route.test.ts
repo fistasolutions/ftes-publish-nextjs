@@ -332,3 +332,37 @@ describe("revalidation failures are reported, not swallowed (SPEC-002)", () => {
     expect(body).toEqual({ url: `${SITE}/blog/best-crm` });
   });
 });
+
+describe("a store that silently no-ops now fails the publish (SPEC-001 Patches)", () => {
+  it("answers 500 store_failed instead of 200 with a URL", async () => {
+    // The exact production shape: a query function that guards a missing connection string
+    // by returning empty rows. It ran on every request, not just at build time, so `upsert`
+    // resolved, the route answered 200 with a URL, and nothing was ever written.
+    const { postgresStore } = await import("../src/postgres.js");
+    const silentlyBroken = postgresStore(() => Promise.resolve({ rows: [] }));
+
+    const { POST } = createPublishRoute({
+      secret: SECRET,
+      siteUrl: SITE,
+      store: silentlyBroken,
+    });
+    const res = await POST(post(VALID, auth()));
+
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "store_failed" });
+    // And nothing is revalidated, so no stale page is regenerated over a write that never was.
+    expect(revalidated).toEqual([]);
+  });
+
+  it("does not leak the driver message to the caller", async () => {
+    // FTES shows the response body to the user; a driver error can carry schema or credentials.
+    const { postgresStore } = await import("../src/postgres.js");
+    const { POST } = createPublishRoute({
+      secret: SECRET,
+      siteUrl: SITE,
+      store: postgresStore(() => Promise.resolve({ rows: [] })),
+    });
+    const body = JSON.stringify(await (await POST(post(VALID, auth()))).json());
+    expect(body).not.toMatch(/connection string|RETURNING|UPSERT/i);
+  });
+});
