@@ -80,7 +80,28 @@ This page is not optional. FTES fetches the URL it publishes to and records the 
 **failed** if nothing responds — so without it an article stores successfully and still shows as
 a failure in the workspace.
 
-**5. The sitemap** — `app/sitemap.ts`:
+**5. The blog index** — `app/blog/page.tsx` (optional, but easy to get wrong):
+
+```tsx
+import { store } from "@/lib/ftes-store"
+
+export default async function Blog() {
+  const posts = await store.list()
+  return (
+    <ul>
+      {posts.map((p) => (
+        <li key={p.slug}><a href={`/blog/${p.slug}`}>{p.title}</a></li>
+      ))}
+    </ul>
+  )
+}
+```
+
+If your blog index reads from somewhere else — MDX files, an older CMS — published articles
+will never appear on it, even though each one is reachable at its own URL. That is not an error
+anywhere; it just quietly looks like nothing was published.
+
+**6. The sitemap** — `app/sitemap.ts`:
 
 ```ts
 import { ftesSitemapEntries } from "@ftes/publish-nextjs"
@@ -91,19 +112,38 @@ export default async function sitemap() {
 }
 ```
 
-**6. Connect it in FTES** — Setup → Integrations → Site publishing:
+**7. Connect it in FTES** — Setup → Integrations → Site publishing:
 your endpoint URL, and the same secret you put in `FTES_PUBLISH_SECRET`.
+
+**8. Verify the install — do not skip this:**
+
+```ts
+import { verifyInstall } from "@ftes/publish-nextjs/verify"
+import { store, SITE } from "@/lib/ftes-store"
+
+const result = await verifyInstall({ siteUrl: SITE, store })
+console.log(result.summary)
+console.table(result.steps)
+```
+
+Run it once against your deployed site. It writes a probe article, fetches its URL, checks the
+index and the sitemap, then deletes the probe — and names the file to create if a step fails.
+
+Steps 1–3 make FTES's publish succeed. Steps 4–6 are what make the article **exist**. It is
+entirely possible to finish step 3, see `201 Created`, and have a site that serves nothing —
+`verifyInstall` is how you find that out in a minute instead of after a real article fails.
 
 ## What it does for you
 
-Three mistakes are easy to make by hand and **invisible once made**. This package prevents all
-three:
+Four mistakes are easy to make by hand and **invisible once made**. This package prevents all
+four:
 
 | Mistake | Consequence | Handled |
 |---|---|---|
 | Rendering the article in the browser | AI crawlers see an empty page; the SEO value is zero | `FtesArticle` is a server component; nothing in this package is client-side |
 | Appending instead of upserting | duplicate posts, because FTES resends the same id on retries | upsert on `id`, and the `Idempotency-Key` header is verified |
 | Forgetting the sitemap | the article is live but undiscoverable | `/sitemap.xml` is revalidated on every publish |
+| Installing the publish route but not the article page | FTES stores the article, returns a URL, and the URL 404s | `verifyInstall()` fetches the URL it would publish and names the missing file |
 
 It also compares your bearer token in constant time, keeps driver errors out of responses
 (FTES shows the response body to the user), and answers `201` vs `200` correctly so FTES can

@@ -19,6 +19,12 @@ export interface ArticleStore {
   upsert(article: Article): Promise<UpsertResult>;
   get?(slug: string): Promise<Article | null>;
   list?(): Promise<Article[]>;
+  /**
+   * Remove one article (SPEC-002). Optional, so no existing custom store breaks.
+   * `verifyInstall()` uses it to clean up its probe; without it the probe must be removed by
+   * hand, which the report says loudly rather than leaving an orphan on a live site.
+   */
+  delete?(slug: string): Promise<void>;
 }
 
 export interface PublishRouteConfig {
@@ -127,6 +133,9 @@ export function createPublishRoute(config: PublishRouteConfig) {
     }
 
     const url = `${siteUrl}${blogBasePath}/${article.slug}`;
+    // SPEC-002: reported in the response body, not only to a log nobody is reading. A failed
+    // revalidation is the most common reason an article is stored but never rendered.
+    const warnings: string[] = [];
 
     if (shouldRevalidate) {
       try {
@@ -138,7 +147,12 @@ export function createPublishRoute(config: PublishRouteConfig) {
       } catch (err) {
         // The article IS saved. A revalidation failure must not turn a successful publish
         // into a failure — FTES would mark it failed and the owner would chase a ghost.
+        const detail = err instanceof Error ? err.message : String(err);
         console.warn("[@ftes/publish-nextjs] revalidation failed (article saved):", err);
+        warnings.push(
+          `revalidation failed (${detail}) — the article is saved but the page may not regenerate. ` +
+            "Run verifyInstall() to check the read path.",
+        );
       }
     }
 
@@ -150,7 +164,10 @@ export function createPublishRoute(config: PublishRouteConfig) {
       }
     }
 
-    return json({ url }, isInsert ? 201 : 200);
+    // `warnings` is OMITTED when empty, never sent as []. An empty array reads as "we checked
+    // and found none", which is a different and stronger claim than "nothing to report".
+    // Additive either way: FTES reads only `url` from this body and ignores the rest.
+    return json(warnings.length ? { url, warnings } : { url }, isInsert ? 201 : 200);
   }
 
   return { POST };

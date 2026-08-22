@@ -139,5 +139,12 @@ export function postgresStore(query: QueryFn, options: PostgresStoreOptions = {}
       );
       return rows.map(rowToArticle);
     },
+
+    async delete(slug: string): Promise<void> {
+      // SPEC-002: only ever used to remove verifyInstall()'s probe. Deleting by slug (not id)
+      // because the probe is identified by its fixed slug, and the table name is already
+      // validated by assertSafeTableName — the slug itself is parameterised.
+      await query(`DELETE FROM ${table} WHERE slug = $1`, [slug]);
+    },
   };
 }

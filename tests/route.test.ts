@@ -27,8 +27,11 @@ const VALID = {
 
 /** Revalidation is a Next.js import; capture the paths it would touch. */
 const revalidated: string[] = [];
+/** Set to make revalidatePath throw — the "static export / wrong runtime" case (SPEC-002). */
+let revalidateError: Error | null = null;
 vi.mock("next/cache", () => ({
   revalidatePath: (p: string) => {
+    if (revalidateError) throw revalidateError;
     revalidated.push(p);
   },
 }));
@@ -58,6 +61,7 @@ function makeStore(result: UpsertResult = { isInsert: true }) {
 
 beforeEach(() => {
   revalidated.length = 0;
+  revalidateError = null;
 });
 
 describe("auth (AC 2, 3)", () => {
@@ -288,5 +292,43 @@ describe("error safety (AC 9)", () => {
     });
     await POST(post(VALID, auth()));
     expect(seen).toEqual([["art-1", `${SITE}/blog/best-crm`]]);
+  });
+});
+
+describe("revalidation failures are reported, not swallowed (SPEC-002)", () => {
+  it("returns a warning when revalidation throws, and still succeeds", async () => {
+    // A revalidation failure is the most common reason an article is stored but never renders.
+    // Previously it went to console.warn only, so the response looked identical to a healthy
+    // publish — and the site owner learned about it from a 404 days later.
+    revalidateError = new Error("static export: revalidatePath is unavailable");
+
+    const { POST } = createPublishRoute({
+      secret: SECRET,
+      siteUrl: SITE,
+      store: makeStore().store,
+    });
+    const res = await POST(post(VALID, auth()));
+    const body = (await res.json()) as { url: string; warnings?: string[] };
+
+    // The article IS saved — a revalidation failure must never turn that into a failure,
+    // or FTES marks it failed and the owner chases a ghost.
+    expect(res.status).toBe(201);
+    expect(body.url).toBe(`${SITE}/blog/best-crm`);
+    expect(body.warnings?.[0]).toContain("revalidation failed");
+    expect(body.warnings?.[0]).toContain("verifyInstall");
+    revalidateError = null;
+  });
+
+  it("omits `warnings` entirely on a clean publish", async () => {
+    const { POST } = createPublishRoute({
+      secret: SECRET,
+      siteUrl: SITE,
+      store: makeStore().store,
+    });
+    const body = (await (await POST(post(VALID, auth()))).json()) as Record<string, unknown>;
+    // Absent, not []. An empty array claims "we checked and found none", which is a different
+    // and stronger statement than "nothing to report".
+    expect("warnings" in body).toBe(false);
+    expect(body).toEqual({ url: `${SITE}/blog/best-crm` });
   });
 });
